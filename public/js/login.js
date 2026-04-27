@@ -1,11 +1,5 @@
-(function setupFixationHelper() {
-  const params = new URLSearchParams(window.location.search);
-  const fixedSession = params.get("sid");
-
-  if (fixedSession) {
-    document.cookie = `sid=${fixedSession}; path=/`;
-  }
-})();
+// Problem: Code accepted session ID from URL query parameter, attacker could hijack via malicious links.
+// Solution: Removed that, which is hopefully fine to do. Only server-generated session IDs via cookies are accepted.
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();

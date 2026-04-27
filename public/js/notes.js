@@ -1,11 +1,24 @@
+// Problem: Template literals with ${} can inject untrusted data as HTML, leading to XSS issues.
+// Solution: Replaced those with DOM API stuff, with textContent to escape HTML special characters.
 function noteCard(note) {
-  return `
-    <article class="note-card">
-      <h3>${note.title}</h3>
-      <p class="note-meta">Owner: ${note.ownerUsername} | ID: ${note.id} | Pinned: ${note.pinned}</p>
-      <div class="note-body">${note.body}</div>
-    </article>
-  `;
+  const article = document.createElement("article");
+  article.className = "note-card";
+  
+  const h3 = document.createElement("h3");
+  h3.textContent = note.title;
+  article.appendChild(h3);
+  
+  const meta = document.createElement("p");
+  meta.className = "note-meta";
+  meta.textContent = `Owner: ${note.ownerUsername} | ID: ${note.id} | Pinned: ${note.pinned}`;
+  article.appendChild(meta);
+  
+  const body = document.createElement("div");
+  body.className = "note-body";
+  body.textContent = note.body;
+  article.appendChild(body);
+  
+  return article;
 }
 
 async function loadNotes(ownerId, search) {
@@ -21,7 +34,10 @@ async function loadNotes(ownerId, search) {
 
   const result = await api(`/api/notes?${query.toString()}`);
   const notesList = document.getElementById("notes-list");
-  notesList.innerHTML = result.notes.map(noteCard).join("");
+  // Problem: innerHTML can execute injected scripts from untrusted data. 
+  // Solution: Use appendChild with DOM elements created via textContent.
+  notesList.innerHTML = "";
+  result.notes.forEach(note => notesList.appendChild(noteCard(note)));
 }
 
 (async function bootstrapNotes() {

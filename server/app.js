@@ -8,8 +8,10 @@ function sendPublicFile(response, fileName) {
   response.sendFile(path.join(__dirname, "..", "public", fileName));
 }
 
+// Problem: Session hijacking could occur if the session ID is predictable or accepted from the client.
+// Solution: Generates more unpredictable IDs server-side, and will never accept from client input. Just in case that'd be an issue. Maybe doing too much?
 function createSessionId() {
-  return `SESSION-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
+  return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
 async function createApp() {
@@ -88,12 +90,16 @@ async function createApp() {
     const username = String(request.body.username || "");
     const password = String(request.body.password || "");
 
-    const query = `
-      SELECT id, username, role, display_name
-      FROM users
-      WHERE username = '${username}' AND password = '${password}'
-    `;
-    const user = await db.get(query);
+    // Problem: String interpolation enables SQL injection. Attackers could do the dreaded " OR "1"="1 trick, and many others...
+    // Solution: Use parameterized queries with placeholders to handle user input.
+    const user = await db.get(
+      `
+        SELECT id, username, role, display_name
+        FROM users
+        WHERE username = ? AND password = ?
+      `,
+      [username, password]
+    );
 
     if (!user) {
       response.status(401).json({ error: "Invalid username or password." });
@@ -108,8 +114,12 @@ async function createApp() {
       [sessionId, user.id, new Date().toISOString()]
     );
 
+    // Problem: Cookies without httpOnly/sameSite are vulnerable to XSS and CSRF attacks.
+    // Solution: The cookies now have httpOnly and sameSite, which is set to strict to be safe.
     response.cookie("sid", sessionId, {
-      path: "/"
+      path: "/",
+      httpOnly: true,
+      sameSite: "strict"
     });
 
     response.json({
@@ -133,24 +143,33 @@ async function createApp() {
   });
 
   app.get("/api/notes", requireAuth, async (request, response) => {
-    const ownerId = request.query.ownerId || request.currentUser.id;
-    const search = request.query.search || "";
+    const requestedOwnerId = Number(request.query.ownerId || request.currentUser.id);
+    
+    // Problem: No authorization check, so users can access the notes of other users via the ownerId parameter.
+    // Solution: Only allow access to owned notes or default to current user for non-admins. Admins can look at any notes if they want.
+    const ownerId = requestedOwnerId === request.currentUser.id || request.currentUser.role === "admin" ? requestedOwnerId : request.currentUser.id;
+    const search = String(request.query.search || "");
 
-    const notes = await db.all(`
-      SELECT
-        notes.id,
-        notes.owner_id AS ownerId,
-        users.username AS ownerUsername,
-        notes.title,
-        notes.body,
-        notes.pinned,
-        notes.created_at AS createdAt
-      FROM notes
-      JOIN users ON users.id = notes.owner_id
-      WHERE notes.owner_id = ${ownerId}
-        AND (notes.title LIKE '%${search}%' OR notes.body LIKE '%${search}%')
-      ORDER BY notes.pinned DESC, notes.id DESC
-    `);
+    // Problem: String interpolation in search query enables SQL injection. 
+    // Solution: Uses parameterized queries for all user-submitted values. 
+    const notes = await db.all(
+      `
+        SELECT
+          notes.id,
+          notes.owner_id AS ownerId,
+          users.username AS ownerUsername,
+          notes.title,
+          notes.body,
+          notes.pinned,
+          notes.created_at AS createdAt
+        FROM notes
+        JOIN users ON users.id = notes.owner_id
+        WHERE notes.owner_id = ?
+          AND (notes.title LIKE ? OR notes.body LIKE ?)
+        ORDER BY notes.pinned DESC, notes.id DESC
+      `,
+      [ownerId, `%${search}%`, `%${search}%`]
+    );
 
     response.json({ notes });
   });
@@ -175,6 +194,13 @@ async function createApp() {
   app.get("/api/settings", requireAuth, async (request, response) => {
     const userId = Number(request.query.userId || request.currentUser.id);
 
+    // Problem: No authorization check, so users can access the settings of other users via the userId parameter.
+    // Solution: Unless you're an admin, you can only access your own settings. 
+    if (userId !== request.currentUser.id && request.currentUser.role !== "admin") {
+      response.status(403).json({ error: "Access denied." });
+      return;
+    }
+
     const settings = await db.get(
       `
         SELECT
@@ -197,6 +223,14 @@ async function createApp() {
 
   app.post("/api/settings", requireAuth, async (request, response) => {
     const userId = Number(request.body.userId || request.currentUser.id);
+
+    // Problem: No authorization check, so users can modify the settings of other users via the userId parameter.
+    // Solution: Unless you're an admin, you can only modify your own settings. 
+    if (userId !== request.currentUser.id && request.currentUser.role !== "admin") {
+      response.status(403).json({ error: "Access denied." });
+      return;
+    }
+
     const displayName = String(request.body.displayName || "");
     const statusMessage = String(request.body.statusMessage || "");
     const theme = String(request.body.theme || "classic");
@@ -226,7 +260,13 @@ async function createApp() {
     });
   });
 
-  app.get("/api/admin/users", requireAuth, async (_request, response) => {
+  app.get("/api/admin/users", requireAuth, async (request, response) => {
+    // Problem: Admin endpoint should only be accessible to admins, not just any random user.
+    // Solution: Checks for an admin role before proceeding.
+    if (request.currentUser.role !== "admin") {
+      response.status(403).json({ error: "Admin role required." });
+      return;
+    }
     const users = await db.all(`
       SELECT
         users.id,

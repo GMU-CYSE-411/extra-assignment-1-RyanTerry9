@@ -10,10 +10,18 @@ async function loadSettings(userId) {
   form.elements.theme.value = settings.theme;
   form.elements.statusMessage.value = settings.statusMessage;
   form.elements.emailOptIn.checked = Boolean(settings.emailOptIn);
-  document.getElementById("status-preview").innerHTML = `
-    <p><strong>${settings.displayName}</strong></p>
-    <p>${settings.statusMessage}</p>
-  `;
+  // Problem: innerHTML with ${} can inject untrusted data as HTML, leading to XSS issues.
+  // Solution: Replaced those with DOM API stuff, with textContent to escape HTML special characters.
+  const statusPreview = document.getElementById("status-preview");
+  statusPreview.innerHTML = "";
+  const nameP = document.createElement("p");
+  const nameStrong = document.createElement("strong");
+  nameStrong.textContent = settings.displayName;
+  nameP.appendChild(nameStrong);
+  statusPreview.appendChild(nameP);
+  const messageP = document.createElement("p");
+  messageP.textContent = settings.statusMessage;
+  statusPreview.appendChild(messageP);
 
   writeJson("settings-output", settings);
 }
